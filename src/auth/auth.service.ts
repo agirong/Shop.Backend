@@ -1,52 +1,69 @@
-import { ConflictException, Injectable, UnauthorizedException } from '@nestjs/common';
+import { ConflictException, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import * as bcrypt from 'bcrypt'
 import { callProcedure } from '../Infraestructure/dbHelper.js';
 import { RegisterLoginDto } from './dto/register-login.dto.js';
 import { LoginDto } from './dto/login.dto.js';
+import { JwtService } from '@nestjs/jwt';
+import { maskEmail } from '../utils/mask.js';
 
 @Injectable()
 export class AuthService {
-    constructor(private readonly dataSource: DataSource){}
+  private readonly logger = new Logger(AuthService.name);
 
-      async validateCustomer(loginDto : LoginDto) {
-        const result = await callProcedure(this.dataSource, 'sp_auth_Customers', [loginDto.email]);
-        const customer = result[0];
+  constructor(private readonly dataSource: DataSource, private readonly jwtService: JwtService) {}
 
-        console.log('ver valor de customer ',customer);
+  async validateCustomer(loginDto: LoginDto) {
+    const masked = maskEmail(loginDto.email);
+    this.logger.log(`Login attempt for: ${masked}`);
 
-        if(!customer){
-            throw new UnauthorizedException('Credenciales invalidas');
-        }
+    let customer: any;
+    try {
+      const result = await callProcedure(this.dataSource, 'sp_auth_Customers', [loginDto.email]);
+      customer = result[0];
+    } catch (error) {
+      this.logger.error(`DB error durante login para ${masked}`, (error as Error).stack);
+      throw error;
+    }
 
-        const isPassValid = await bcrypt.compare(loginDto.password, customer.password);
+    if (!customer) {
+      this.logger.warn(`Login failed — usuario no encontrado: ${masked}`);
+      throw new UnauthorizedException('Credenciales invalidas');
+    }
 
-        if(!isPassValid){
-            throw new UnauthorizedException('Credenciales invalidas');            
-        }
+    const isPassValid = await bcrypt.compare(loginDto.password, customer.pass_hash);
+    if (!isPassValid) {
+      this.logger.warn(`Login failed — credenciales invalidas para userId: ${customer.customer_id}`);
+      throw new UnauthorizedException('Credenciales invalidas');
+    }
 
-        const { pass_hash, ...userWithoutPassword } = customer;
-        return userWithoutPassword;
-      }
+    this.logger.log(`Login successful para userId: ${customer.customer_id}`);
+    const payload = { sub: customer.customer_id, email: customer.email };
+    const token = await this.jwtService.signAsync(payload);
 
-      async registerCustomer(registerLoginDto : RegisterLoginDto){
-        const rondas = 10;
-        const passHash = await bcrypt.hash(registerLoginDto.password, rondas);
+    return { access_token: token };
+  }
 
-        try{
-            console.log('Error al guardar el cliente ', registerLoginDto)
-            const result = await callProcedure(this.dataSource,'sp_register_Customer', [
-                registerLoginDto.firstName,
-                registerLoginDto.lastName,
-                registerLoginDto.email,
-                passHash
-            ])
-            return { message: 'Cliente registrado exitosamente', customerId: result[0].customer_id };
-        }catch(error){
-            console.log('Error al guardar el cliente ', error)
-            throw new ConflictException('El correo ya se encuentra registrado');            
-        }
-      }
+  async registerCustomer(registerLoginDto: RegisterLoginDto) {
+    const masked = maskEmail(registerLoginDto.email);
+    this.logger.log(`Register attempt for: ${masked}`);
+
+    const rondas = 10;
+    const passHash = await bcrypt.hash(registerLoginDto.password, rondas);
+
+    try {
+      const result = await callProcedure(this.dataSource, 'sp_register_Customer', [
+        registerLoginDto.firstName,
+        registerLoginDto.lastName,
+        registerLoginDto.email,
+        passHash
+      ]);
+      const customerId = result[0].customer_id;
+      this.logger.log(`Customer registered successfully — userId: ${customerId}`);
+      return { message: 'Cliente registrado exitosamente', customerId };
+    } catch (error) {
+      this.logger.warn(`Register failed — email already exists: ${masked}`);
+      throw new ConflictException('El correo ya se encuentra registrado');
+    }
+  }
 }
-
-

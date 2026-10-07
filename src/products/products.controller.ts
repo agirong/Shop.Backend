@@ -8,6 +8,14 @@ export class ProductsController {
   constructor(private readonly productsService: ProductsService) {}
 
   @UseGuards(JwtAuthGuard)
+  @Get()
+  async getAll(
+  ) {
+    this.logger.log(`GET /products/`)
+    return this.productsService.getAllProducts();
+  }
+
+  @UseGuards(JwtAuthGuard)
   @Get('category/:categoryId')
   async getByCategory(
     @Param('categoryId', ParseIntPipe) categoryId: number,

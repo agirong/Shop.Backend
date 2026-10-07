@@ -6,7 +6,12 @@ import { DataSource } from 'typeorm';
 export class ProductsService {
   constructor(private readonly dataSource: DataSource) {}
 
+  async getAllProducts() {
+    return callProcedure(this.dataSource, 'sp_get_products');
+  }
+
   async getByCategory(categoryId: number) {
     return callProcedure(this.dataSource, 'sp_get_products_by_category', [categoryId]);
   }
+
 }
